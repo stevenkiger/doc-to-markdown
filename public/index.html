@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Doc → Markdown</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Syne:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Syne',sans-serif;background:#f5f4f0;min-height:100vh;padding:2rem 1.5rem;color:#1a1a18}
+  h1{font-size:26px;font-weight:700;letter-spacing:-0.5px}
+  .subtitle{font-size:14px;color:#888780;margin-top:4px}
+  .header{margin-bottom:1.5rem}
+  .drop-zone{border:1.5px dashed #b4b2a9;border-radius:12px;padding:2.5rem 1.5rem;text-align:center;cursor:pointer;transition:all 0.2s;background:#fff;margin-bottom:1rem}
+  .drop-zone.drag-over{border-color:#378add;background:#e6f1fb}
+  .drop-zone-icon{font-size:28px;margin-bottom:0.75rem;display:block}
+  .drop-label{font-size:15px;font-weight:500;margin-bottom:4px}
+  .drop-sub{font-size:13px;color:#888780}
+  .file-types{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:12px}
+  .badge{font-size:11px;padding:3px 8px;border-radius:4px;background:#f1efe8;border:0.5px solid #d3d1c7;color:#888780;font-family:'IBM Plex Mono',monospace}
+  .file-list{display:flex;flex-direction:column;gap:8px;margin-bottom:1rem}
+  .file-item{background:#fff;border:0.5px solid #d3d1c7;border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:10px}
+  .file-ext{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:500;padding:3px 7px;border-radius:4px;text-transform:uppercase;min-width:40px;text-align:center}
+  .ext-pdf{background:#faece7;color:#993c1d}
+  .ext-docx{background:#e6f1fb;color:#185fa5}
+  .ext-pptx{background:#faeeda;color:#854f0b}
+  .ext-xlsx{background:#eaf3de;color:#3b6d11}
+  .ext-csv,.ext-txt{background:#f1efe8;color:#5f5e5a}
+  .file-name{font-size:14px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .file-size{font-size:12px;color:#888780}
+  .remove-btn{background:none;border:none;cursor:pointer;color:#b4b2a9;font-size:16px;padding:2px 6px;border-radius:4px;line-height:1}
+  .remove-btn:hover{background:#fcebeb;color:#a32d2d}
+  .convert-btn{width:100%;padding:12px;background:#1a1a18;color:#fff;border:none;border-radius:8px;font-family:'Syne',sans-serif;font-size:15px;font-weight:500;cursor:pointer;transition:opacity 0.2s;margin-bottom:1.5rem}
+  .convert-btn:hover{opacity:0.85}
+  .convert-btn:disabled{opacity:0.4;cursor:not-allowed}
+  .results{display:flex;flex-direction:column;gap:1rem}
+  .result-card{background:#fff;border:0.5px solid #d3d1c7;border-radius:12px;overflow:hidden}
+  .result-header{padding:12px 16px;display:flex;align-items:center;gap:10px;border-bottom:0.5px solid #d3d1c7;cursor:pointer;user-select:none}
+  .result-header:hover{background:#f5f4f0}
+  .result-title{font-size:14px;font-weight:500;flex:1}
+  .section-count{font-size:12px;color:#888780;font-family:'IBM Plex Mono',monospace}
+  .chevron{font-size:12px;color:#b4b2a9;transition:transform 0.2s}
+  .chevron.open{transform:rotate(180deg)}
+  .sections{display:none;flex-direction:column}
+  .sections.open{display:flex}
+  .section-item{border-bottom:0.5px solid #d3d1c7}
+  .section-item:last-child{border-bottom:none}
+  .section-header{padding:10px 16px;display:flex;align-items:center;gap:10px;cursor:pointer;background:#f5f4f0}
+  .section-header:hover{background:#eeecea}
+  .section-name{font-size:13px;font-weight:500;flex:1}
+  .section-slug{font-size:12px;color:#888780;font-family:'IBM Plex Mono',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px}
+  .section-body{display:none;padding:12px 16px;background:#fff}
+  .section-body.open{display:block}
+  .md-preview{font-family:'IBM Plex Mono',monospace;font-size:12px;white-space:pre-wrap;line-height:1.6;max-height:280px;overflow-y:auto;border:0.5px solid #d3d1c7;border-radius:8px;padding:12px;background:#f5f4f0}
+  .section-actions{display:flex;gap:8px;margin-top:10px}
+  .action-btn{font-size:12px;padding:5px 12px;border:0.5px solid #b4b2a9;border-radius:8px;background:transparent;cursor:pointer;font-family:'Syne',sans-serif;transition:background 0.15s}
+  .action-btn:hover{background:#f5f4f0}
+  .download-all-btn{width:100%;padding:10px;border:0.5px solid #b4b2a9;border-radius:8px;background:transparent;cursor:pointer;font-family:'Syne',sans-serif;font-size:14px;font-weight:500;margin-top:0.5rem;transition:background 0.15s}
+  .download-all-btn:hover{background:#f5f4f0}
+  .status-bar{font-size:13px;color:#888780;display:flex;align-items:center;gap:8px;margin-bottom:1rem}
+  .spinner{width:14px;height:14px;border:2px solid #d3d1c7;border-top-color:#1a1a18;border-radius:50%;animation:spin 0.7s linear infinite;flex-shrink:0}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .progress-file{font-weight:500;color:#1a1a18}
+  .error-text{color:#a32d2d}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Doc → Markdown</h1>
+  <p class="subtitle">Upload files, get LLM-ready markdown — split by section</p>
+</div>
+
+<div class="drop-zone" id="dropZone">
+  <span class="drop-zone-icon">⬇</span>
+  <p class="drop-label">Drop files here or click to browse</p>
+  <p class="drop-sub">Multiple files supported</p>
+  <div class="file-types">
+    <span class="badge">.pdf</span>
+    <span class="badge">.docx</span>
+    <span class="badge">.pptx</span>
+    <span class="badge">.xlsx</span>
+    <span class="badge">.csv</span>
+    <span class="badge">.txt</span>
+  </div>
+</div>
+<input type="file" id="fileInput" multiple accept=".pdf,.docx,.pptx,.xlsx,.csv,.txt" style="display:none">
+
+<div class="file-list" id="fileList"></div>
+<div id="statusBar" style="display:none" class="status-bar"></div>
+<button class="convert-btn" id="convertBtn" disabled>Convert to markdown</button>
+<div class="results" id="results"></div>
+<button class="download-all-btn" id="downloadAllBtn" style="display:none">⬇ Download all as ZIP</button>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const fileList = document.getElementById('fileList');
+const convertBtn = document.getElementById('convertBtn');
+const resultsEl = document.getElementById('results');
+const downloadAllBtn = document.getElementById('downloadAllBtn');
+const statusBar = document.getElementById('statusBar');
+
+let files = [];
+window._allResults = {};
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('drag-over'); addFiles([...e.dataTransfer.files]); });
+fileInput.addEventListener('change', () => addFiles([...fileInput.files]));
+
+function addFiles(newFiles) {
+  newFiles.forEach(f => {
+    const ext = f.name.split('.').pop().toLowerCase();
+    if (!['pdf','docx','pptx','xlsx','csv','txt'].includes(ext)) return;
+    if (!files.find(x => x.name === f.name)) files.push(f);
+  });
+  renderFileList();
+}
+
+function renderFileList() {
+  fileList.innerHTML = '';
+  files.forEach((f, i) => {
+    const ext = f.name.split('.').pop().toLowerCase();
+    const size = f.size < 1024*1024 ? (f.size/1024).toFixed(1)+'KB' : (f.size/1024/1024).toFixed(1)+'MB';
+    const item = document.createElement('div');
+    item.className = 'file-item';
+    item.innerHTML = `<span class="file-ext ext-${ext}">${ext}</span><span class="file-name">${f.name}</span><span class="file-size">${size}</span><button class="remove-btn" data-i="${i}">✕</button>`;
+    fileList.appendChild(item);
+  });
+  fileList.querySelectorAll('.remove-btn').forEach(btn => {
+    btn.addEventListener('click', () => { files.splice(parseInt(btn.dataset.i), 1); renderFileList(); });
+  });
+  convertBtn.disabled = files.length === 0;
+}
+
+function fileToBase64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result.split(',')[1]);
+    r.onerror = () => rej(new Error('Read failed'));
+    r.readAsDataURL(file);
+  });
+}
+
+function showStatus(msg, loading=true) {
+  statusBar.style.display = 'flex';
+  statusBar.innerHTML = loading ? `<span class="spinner"></span><span>${msg}</span>` : `<span>${msg}</span>`;
+}
+function hideStatus() { statusBar.style.display = 'none'; }
+
+async function convertFile(file) {
+  const ext = file.name.split('.').pop().toLowerCase();
+  const prompt = `You are converting a document to clean, LLM-ready markdown.
+File: "${file.name}"
+Instructions:
+1. Extract all text content faithfully
+2. Detect logical sections by headings, chapters, or major topic breaks
+3. Return ONLY valid JSON, no extra text, no markdown fences:
+{"fileName":"filename without extension","sections":[{"title":"Section title","slug":"kebab-case-slug","content":"Full markdown content"}]}
+4. For short docs a single section is fine
+5. Make markdown clean and immediately usable by an LLM
+6. Preserve tables as markdown tables, lists as markdown lists`;
+
+  let body;
+  if (ext === 'pdf') {
+    const b64 = await fileToBase64(file);
+    body = { model:'claude-sonnet-4-20250514', max_tokens:4000, messages:[{ role:'user', content:[
+      { type:'document', source:{ type:'base64', media_type:'application/pdf', data:b64 } },
+      { type:'text', text:prompt }
+    ]}]};
+  } else {
+    let text = '';
+    try { text = await file.text(); if (text.length > 60000) text = text.slice(0,60000)+'\n[truncated]'; } catch(e) { text = `[Binary: ${file.name}]`; }
+    body = { model:'claude-sonnet-4-20250514', max_tokens:4000, messages:[{ role:'user', content:`${prompt}\n\nContent:\n\`\`\`\n${text}\n\`\`\`` }]};
+  }
+
+  const response = await fetch('/api/convert', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error?.message || data.error || response.statusText);
+  const raw = data.content.map(c => c.text||'').join('');
+  const clean = raw.replace(/```json|```/g,'').trim();
+  return JSON.parse(clean);
+}
+
+convertBtn.addEventListener('click', async () => {
+  convertBtn.disabled = true;
+  resultsEl.innerHTML = '';
+  window._allResults = {};
+  downloadAllBtn.style.display = 'none';
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    showStatus(`Converting <span class="progress-file">${file.name}</span> (${i+1} of ${files.length})...`);
+    try {
+      const result = await convertFile(file);
+      window._allResults[result.fileName] = result;
+      renderResult(result);
+    } catch(err) {
+      const errCard = document.createElement('div');
+      errCard.className = 'result-card';
+      errCard.innerHTML = `<div class="result-header"><span class="result-title error-text">${file.name} — failed: ${err.message}</span></div>`;
+      resultsEl.appendChild(errCard);
+    }
+  }
+
+  hideStatus();
+  convertBtn.disabled = false;
+  if (Object.keys(window._allResults).length > 0) downloadAllBtn.style.display = 'block';
+});
+
+function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function renderResult(result) {
+  const card = document.createElement('div');
+  card.className = 'result-card';
+  const sectionsHtml = result.sections.map((s,si)=>`
+    <div class="section-item">
+      <div class="section-header" data-si="${si}" data-fkey="${result.fileName}">
+        <span class="section-name">${escHtml(s.title)}</span>
+        <span class="section-slug">${s.slug}.md</span>
+      </div>
+      <div class="section-body" id="sb-${result.fileName.replace(/\W/g,'_')}-${si}">
+        <div class="md-preview">${escHtml(s.content)}</div>
+        <div class="section-actions">
+          <button class="action-btn" onclick="copySection('${result.fileName}',${si})">Copy</button>
+          <button class="action-btn" onclick="dlSection('${result.fileName}','${s.slug}',${si})">⬇ Download .md</button>
+        </div>
+      </div>
+    </div>`).join('');
+
+  card.innerHTML = `
+    <div class="result-header">
+      <span class="result-title">${escHtml(result.fileName)}</span>
+      <span class="section-count">${result.sections.length} section${result.sections.length!==1?'s':''}</span>
+      <span class="chevron open">⌄</span>
+    </div>
+    <div class="sections open">${sectionsHtml}</div>`;
+  resultsEl.appendChild(card);
+
+  card.querySelector('.result-header').addEventListener('click', function(){
+    this.nextElementSibling.classList.toggle('open');
+    this.querySelector('.chevron').classList.toggle('open');
+  });
+  card.querySelectorAll('.section-header').forEach(sh=>{
+    sh.addEventListener('click',function(){
+      const key = this.dataset.fkey.replace(/\W/g,'_');
+      document.getElementById(`sb-${key}-${this.dataset.si}`).classList.toggle('open');
+    });
+  });
+}
+
+window.copySection = (fname,si) => {
+  const r = window._allResults[fname]; if(!r)return;
+  navigator.clipboard.writeText(r.sections[si].content).catch(()=>{});
+};
+window.dlSection = (fname,slug,si) => {
+  const r = window._allResults[fname]; if(!r)return;
+  const blob = new Blob([r.sections[si].content],{type:'text/markdown'});
+  const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`${fname}--${slug}.md`; a.click();
+};
+
+downloadAllBtn.addEventListener('click', async () => {
+  const zip = new JSZip();
+  Object.values(window._allResults).forEach(r=>r.sections.forEach(s=>zip.file(`${r.fileName}--${s.slug}.md`,s.content)));
+  const blob = await zip.generateAsync({type:'blob'});
+  const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='markdown-export.zip'; a.click();
+});
+</script>
+</body>
+</html>
