@@ -156,25 +156,26 @@ async function convertFile(file) {
   const prompt = `You are converting a document to clean, LLM-ready markdown.
 File: "${file.name}"
 Instructions:
-1. Extract all text content faithfully
+1. Extract all text content and structure it as clean markdown
 2. Detect logical sections by headings, chapters, or major topic breaks
-3. Return ONLY valid JSON, no extra text, no markdown fences:
+3. Return ONLY valid, complete JSON — no extra text, no markdown fences, no trailing commas:
 {"fileName":"filename without extension","sections":[{"title":"Section title","slug":"kebab-case-slug","content":"Full markdown content"}]}
-4. For short docs a single section is fine
+4. For short docs a single section is fine. For large docs split into logical sections.
 5. Make markdown clean and immediately usable by an LLM
-6. Preserve tables as markdown tables, lists as markdown lists`;
+6. Preserve tables as markdown tables, lists as markdown lists
+7. CRITICAL: Be concise. Summarise dense or repetitive passages rather than reproducing them verbatim. Your entire response must be valid complete JSON — never truncate mid-string.`;
 
   let body;
   if (ext === 'pdf') {
     const b64 = await fileToBase64(file);
-    body = { model:'claude-sonnet-4-20250514', max_tokens:4000, messages:[{ role:'user', content:[
+    body = { model:'claude-sonnet-4-20250514', max_tokens:8000, messages:[{ role:'user', content:[
       { type:'document', source:{ type:'base64', media_type:'application/pdf', data:b64 } },
       { type:'text', text:prompt }
     ]}]};
   } else {
     let text = '';
-    try { text = await file.text(); if (text.length > 60000) text = text.slice(0,60000)+'\n[truncated]'; } catch(e) { text = `[Binary: ${file.name}]`; }
-    body = { model:'claude-sonnet-4-20250514', max_tokens:4000, messages:[{ role:'user', content:`${prompt}\n\nContent:\n\`\`\`\n${text}\n\`\`\`` }]};
+    try { text = await file.text(); if (text.length > 30000) text = text.slice(0,30000)+'\n[content truncated — file too large]'; } catch(e) { text = `[Binary: ${file.name}]`; }
+    body = { model:'claude-sonnet-4-20250514', max_tokens:8000, messages:[{ role:'user', content:`${prompt}\n\nContent:\n\`\`\`\n${text}\n\`\`\`` }]};
   }
 
   const response = await fetch('/api/convert', {
@@ -186,8 +187,14 @@ Instructions:
   const data = await response.json();
   if (!response.ok) throw new Error(data.error?.message || data.error || response.statusText);
   const raw = data.content.map(c => c.text||'').join('');
-  const clean = raw.replace(/```json|```/g,'').trim();
-  return JSON.parse(clean);
+  const clean = raw.replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/```\s*$/,'').trim();
+  try {
+    return JSON.parse(clean);
+  } catch(e) {
+    // Try to recover a partial JSON by finding the last complete section
+    const partial = clean.replace(/,?\s*\{[^}]*$/, '').replace(/,?\s*$/, '') + ']}';
+    try { return JSON.parse(partial); } catch(e2) { throw new Error('Response too large to parse — try a smaller file or split it into parts'); }
+  }
 }
 
 convertBtn.addEventListener('click', async () => {
