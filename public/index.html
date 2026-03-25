@@ -186,8 +186,8 @@ function fileToBase64(file) {
 function showStatus(msg, loading=true) {}
 function hideStatus() {}
 
-const CHUNK_PAGES = 20;
-const MAX_B64_BYTES = 4 * 1024 * 1024; // 4MB base64 threshold
+const CHUNK_PAGES = 5;
+const MAX_B64_BYTES = 1 * 1024 * 1024; // 1MB — always chunk above this
 
 async function splitPdfIntoChunks(file) {
   const arrayBuf = await file.arrayBuffer();
