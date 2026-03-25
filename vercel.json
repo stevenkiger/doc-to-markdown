@@ -2,10 +2,17 @@
   "version": 2,
   "builds": [
     { "src": "api/convert.js", "use": "@vercel/node" },
+    { "src": "api/process-pdf.js", "use": "@vercel/node" },
     { "src": "public/**", "use": "@vercel/static" }
   ],
   "routes": [
     { "src": "/api/convert", "dest": "/api/convert.js" },
+    { "src": "/api/process-pdf", "dest": "/api/process-pdf.js" },
     { "src": "/(.*)", "dest": "/public/$1" }
-  ]
+  ],
+  "functions": {
+    "api/process-pdf.js": {
+      "maxDuration": 300
+    }
+  }
 }

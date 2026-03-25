@@ -100,7 +100,6 @@
 <button class="download-all-btn" id="downloadAllBtn" style="display:none">⬇ Download all as ZIP</button>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
 <script>
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
@@ -186,32 +185,6 @@ function fileToBase64(file) {
 function showStatus(msg, loading=true) {}
 function hideStatus() {}
 
-const CHUNK_PAGES = 5;
-const MAX_B64_BYTES = 1 * 1024 * 1024; // 1MB — always chunk above this
-
-async function splitPdfIntoChunks(file) {
-  const arrayBuf = await file.arrayBuffer();
-  const pdfDoc = await PDFLib.PDFDocument.load(arrayBuf);
-  const totalPages = pdfDoc.getPageCount();
-  const chunks = [];
-  for (let start = 0; start < totalPages; start += CHUNK_PAGES) {
-    const end = Math.min(start + CHUNK_PAGES, totalPages);
-    const chunk = await PDFLib.PDFDocument.create();
-    const pages = await chunk.copyPages(pdfDoc, Array.from({length: end - start}, (_, i) => start + i));
-    pages.forEach(p => chunk.addPage(p));
-    const bytes = await chunk.save();
-    const uint8 = new Uint8Array(bytes);
-    let binary = '';
-    const chunkSize = 8192;
-    for (let j = 0; j < uint8.length; j += chunkSize) {
-      binary += String.fromCharCode(...uint8.subarray(j, j + chunkSize));
-    }
-    const b64 = btoa(binary);
-    chunks.push({ b64, startPage: start + 1, endPage: end, totalPages });
-  }
-  return chunks;
-}
-
 async function callAPI(body) {
   const response = await fetch('/api/convert', {
     method: 'POST',
@@ -232,58 +205,36 @@ async function callAPI(body) {
 
 async function convertFile(file, onChunkProgress) {
   const ext = file.name.split('.').pop().toLowerCase();
-  const baseName = file.name.replace(/\.[^.]+$/, '');
 
-  const makePrompt = (label) => `You are converting a document to clean, LLM-ready markdown.
-File: "${label}"
-Instructions:
-1. Extract all text content and structure it as clean markdown
-2. Detect logical sections by headings, chapters, or major topic breaks
-3. Return ONLY valid, complete JSON — no extra text, no markdown fences, no trailing commas:
+  const prompt = `You are converting a document to clean, LLM-ready markdown.
+File: "${file.name}"
+Return ONLY valid complete JSON, no extra text, no markdown fences:
 {"fileName":"filename without extension","sections":[{"title":"Section title","slug":"kebab-case-slug","content":"Full markdown content"}]}
-4. For short chunks a single section is fine. For larger chunks split into logical sections.
-5. Make markdown clean and immediately usable by an LLM
-6. Preserve tables as markdown tables, lists as markdown lists
-7. CRITICAL: Be concise. Your entire response must be valid complete JSON — never truncate mid-string.`;
+- Extract all text faithfully, split into logical sections by headings or topic
+- Be concise, preserve tables and lists in markdown format
+- Never truncate mid-string — response must be complete valid JSON`;
 
   if (ext === 'pdf') {
-    const rawB64 = await fileToBase64(file);
-    // If small enough, send as one chunk
-    if (rawB64.length < MAX_B64_BYTES) {
-      onChunkProgress && onChunkProgress(0.5);
-      const result = await callAPI({ model:'claude-sonnet-4-20250514', max_tokens:8000, messages:[{ role:'user', content:[
-        { type:'document', source:{ type:'base64', media_type:'application/pdf', data:rawB64 } },
-        { type:'text', text:makePrompt(file.name) }
-      ]}]});
-      onChunkProgress && onChunkProgress(1);
-      return result;
-    }
+    // Always use server-side processing for PDFs — handles large image-heavy files
+    onChunkProgress && onChunkProgress(0.1);
+    const b64 = await fileToBase64(file);
+    onChunkProgress && onChunkProgress(0.2);
 
-    // Large PDF — split into page chunks
-    const chunks = await splitPdfIntoChunks(file);
-    const allSections = [];
-    for (let ci = 0; ci < chunks.length; ci++) {
-      const { b64, startPage, endPage, totalPages } = chunks[ci];
-      const label = `${file.name} (pages ${startPage}–${endPage} of ${totalPages})`;
-      const result = await callAPI({ model:'claude-sonnet-4-20250514', max_tokens:8000, messages:[{ role:'user', content:[
-        { type:'document', source:{ type:'base64', media_type:'application/pdf', data:b64 } },
-        { type:'text', text:makePrompt(label) }
-      ]}]});
-      // Prefix section titles with page range to keep them distinct
-      result.sections.forEach(s => {
-        s.title = `[pp. ${startPage}–${endPage}] ${s.title}`;
-        s.slug = `pp-${startPage}-${endPage}-${s.slug}`;
-        allSections.push(s);
-      });
-      onChunkProgress && onChunkProgress((ci + 1) / chunks.length);
-    }
-    return { fileName: baseName, sections: allSections };
+    const response = await fetch('/api/process-pdf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pdfBase64: b64, fileName: file.name })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error?.message || data.error || response.statusText);
+    onChunkProgress && onChunkProgress(1);
+    return data;
 
   } else {
     let text = '';
     try { text = await file.text(); if (text.length > 30000) text = text.slice(0,30000)+'\n[content truncated]'; } catch(e) { text = `[Binary: ${file.name}]`; }
     onChunkProgress && onChunkProgress(0.5);
-    const result = await callAPI({ model:'claude-sonnet-4-20250514', max_tokens:8000, messages:[{ role:'user', content:`${makePrompt(file.name)}\n\nContent:\n\`\`\`\n${text}\n\`\`\`` }]});
+    const result = await callAPI({ model:'claude-sonnet-4-20250514', max_tokens:8000, messages:[{ role:'user', content:`${prompt}\n\nContent:\n\`\`\`\n${text}\n\`\`\`` }]});
     onChunkProgress && onChunkProgress(1);
     return result;
   }

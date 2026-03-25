@@ -1,0 +1,9 @@
+{
+  "name": "doc-to-markdown",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "pdf2pic": "^3.1.1",
+    "sharp": "^0.33.4"
+  }
+}
