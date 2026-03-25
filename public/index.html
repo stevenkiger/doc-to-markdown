@@ -200,7 +200,13 @@ async function splitPdfIntoChunks(file) {
     const pages = await chunk.copyPages(pdfDoc, Array.from({length: end - start}, (_, i) => start + i));
     pages.forEach(p => chunk.addPage(p));
     const bytes = await chunk.save();
-    const b64 = btoa(String.fromCharCode(...new Uint8Array(bytes)));
+    const uint8 = new Uint8Array(bytes);
+    let binary = '';
+    const chunkSize = 8192;
+    for (let j = 0; j < uint8.length; j += chunkSize) {
+      binary += String.fromCharCode(...uint8.subarray(j, j + chunkSize));
+    }
+    const b64 = btoa(binary);
     chunks.push({ b64, startPage: start + 1, endPage: end, totalPages });
   }
   return chunks;
