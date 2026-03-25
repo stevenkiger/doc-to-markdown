@@ -185,6 +185,34 @@ function fileToBase64(file) {
 function showStatus(msg, loading=true) {}
 function hideStatus() {}
 
+const PAGES_PER_CHUNK = 5;
+let pdfjsLib = null;
+
+async function loadPdfJs() {
+  if (pdfjsLib) return pdfjsLib;
+  await new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    s.onload = res; s.onerror = rej;
+    document.head.appendChild(s);
+  });
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  pdfjsLib = window.pdfjsLib;
+  return pdfjsLib;
+}
+
+async function renderPageToJpeg(pdfDoc, pageNum, scale = 1.5) {
+  const page = await pdfDoc.getPage(pageNum);
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+  // Export as JPEG at 70% quality — keeps each page well under 1MB
+  return canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
+}
+
 async function callAPI(body) {
   const response = await fetch('/api/convert', {
     method: 'POST',
@@ -205,36 +233,68 @@ async function callAPI(body) {
 
 async function convertFile(file, onChunkProgress) {
   const ext = file.name.split('.').pop().toLowerCase();
+  const baseName = file.name.replace(/\.[^.]+$/, '');
 
-  const prompt = `You are converting a document to clean, LLM-ready markdown.
-File: "${file.name}"
+  const prompt = (label) => `You are converting a document to clean, LLM-ready markdown.
+File: "${label}"
 Return ONLY valid complete JSON, no extra text, no markdown fences:
-{"fileName":"filename without extension","sections":[{"title":"Section title","slug":"kebab-case-slug","content":"Full markdown content"}]}
-- Extract all text faithfully, split into logical sections by headings or topic
+{"fileName":"${baseName}","sections":[{"title":"Section title","slug":"kebab-case-slug","content":"Full markdown content"}]}
+- Extract all visible text faithfully, split into logical sections by headings or topic
 - Be concise, preserve tables and lists in markdown format
 - Never truncate mid-string — response must be complete valid JSON`;
 
   if (ext === 'pdf') {
-    // Always use server-side processing for PDFs — handles large image-heavy files
-    onChunkProgress && onChunkProgress(0.1);
-    const b64 = await fileToBase64(file);
-    onChunkProgress && onChunkProgress(0.2);
+    const lib = await loadPdfJs();
+    const arrayBuf = await file.arrayBuffer();
+    const pdfDoc = await lib.getDocument({ data: arrayBuf }).promise;
+    const totalPages = pdfDoc.numPages;
+    const allSections = [];
+    const numChunks = Math.ceil(totalPages / PAGES_PER_CHUNK);
 
-    const response = await fetch('/api/process-pdf', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pdfBase64: b64, fileName: file.name })
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error?.message || data.error || response.statusText);
-    onChunkProgress && onChunkProgress(1);
-    return data;
+    for (let chunk = 0; chunk < numChunks; chunk++) {
+      const startPage = chunk * PAGES_PER_CHUNK + 1;
+      const endPage = Math.min(startPage + PAGES_PER_CHUNK - 1, totalPages);
+
+      // Render pages to compressed JPEGs in the browser
+      const images = [];
+      for (let p = startPage; p <= endPage; p++) {
+        const jpeg = await renderPageToJpeg(pdfDoc, p);
+        images.push(jpeg);
+      }
+
+      const imageContent = images.map(b64 => ({
+        type: 'image',
+        source: { type: 'base64', media_type: 'image/jpeg', data: b64 }
+      }));
+
+      const label = totalPages > PAGES_PER_CHUNK
+        ? `${file.name} (pages ${startPage}–${endPage} of ${totalPages})`
+        : file.name;
+
+      const result = await callAPI({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 8000,
+        messages: [{ role: 'user', content: [...imageContent, { type: 'text', text: prompt(label) }] }]
+      });
+
+      result.sections.forEach(s => {
+        if (totalPages > PAGES_PER_CHUNK) {
+          s.title = `[pp. ${startPage}–${endPage}] ${s.title}`;
+          s.slug = `pp-${startPage}-${endPage}-${s.slug}`;
+        }
+        allSections.push(s);
+      });
+
+      onChunkProgress && onChunkProgress((chunk + 1) / numChunks);
+    }
+
+    return { fileName: baseName, sections: allSections };
 
   } else {
     let text = '';
     try { text = await file.text(); if (text.length > 30000) text = text.slice(0,30000)+'\n[content truncated]'; } catch(e) { text = `[Binary: ${file.name}]`; }
     onChunkProgress && onChunkProgress(0.5);
-    const result = await callAPI({ model:'claude-sonnet-4-20250514', max_tokens:8000, messages:[{ role:'user', content:`${prompt}\n\nContent:\n\`\`\`\n${text}\n\`\`\`` }]});
+    const result = await callAPI({ model:'claude-sonnet-4-20250514', max_tokens:8000, messages:[{ role:'user', content:`${prompt(file.name)}\n\nContent:\n\`\`\`\n${text}\n\`\`\`` }]});
     onChunkProgress && onChunkProgress(1);
     return result;
   }
