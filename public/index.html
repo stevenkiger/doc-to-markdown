@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GCW Doc → Markdown</title>
+<title>Doc → Markdown</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Syne:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
@@ -64,7 +64,7 @@
 <body>
 
 <div class="header">
-  <h1>Convert Docs → Markdown LLM Files</h1>
+  <h1>Doc → Markdown</h1>
   <p class="subtitle">Upload files, get LLM-ready markdown — split by section</p>
 </div>
 
@@ -100,6 +100,7 @@
 <button class="download-all-btn" id="downloadAllBtn" style="display:none">⬇ Download all as ZIP</button>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
 <script>
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
@@ -119,15 +120,9 @@ let _progressTimer = null;
 function startProgress(filename, fileIndex, total) {
   progressBlock.style.display = 'block';
   const overallBase = (fileIndex / total) * 100;
-  const overallSlice = (1 / total) * 100;
-  progressLabel.innerHTML = `Converting <span class="progress-file">${filename}</span> — file ${fileIndex + 1} of ${total}`;
-  let fake = 0;
   clearInterval(_progressTimer);
+  progressLabel.innerHTML = `Converting <span class="progress-file">${filename}</span> — file ${fileIndex + 1} of ${total}`;
   setProgress(overallBase);
-  _progressTimer = setInterval(() => {
-    fake = Math.min(fake + (Math.random() * 2.5), 88);
-    setProgress(overallBase + (fake / 100) * overallSlice);
-  }, 400);
 }
 
 function finishProgress(fileIndex, total) {
@@ -188,45 +183,35 @@ function fileToBase64(file) {
   });
 }
 
-function showStatus(msg, loading=true) {
-  statusBar.style.display = 'flex';
-  statusBar.innerHTML = loading ? `<span class="spinner"></span><span>${msg}</span>` : `<span>${msg}</span>`;
-}
-function hideStatus() { statusBar.style.display = 'none'; }
+function showStatus(msg, loading=true) {}
+function hideStatus() {}
 
-async function convertFile(file) {
-  const ext = file.name.split('.').pop().toLowerCase();
-  const prompt = `You are converting a document to clean, LLM-ready markdown.
-File: "${file.name}"
-Instructions:
-1. Extract all text content and structure it as clean markdown
-2. Detect logical sections by headings, chapters, or major topic breaks
-3. Return ONLY valid, complete JSON — no extra text, no markdown fences, no trailing commas:
-{"fileName":"filename without extension","sections":[{"title":"Section title","slug":"kebab-case-slug","content":"Full markdown content"}]}
-4. For short docs a single section is fine. For large docs split into logical sections.
-5. Make markdown clean and immediately usable by an LLM
-6. Preserve tables as markdown tables, lists as markdown lists
-7. CRITICAL: Be concise. Summarise dense or repetitive passages rather than reproducing them verbatim. Your entire response must be valid complete JSON — never truncate mid-string.`;
+const CHUNK_PAGES = 20;
+const MAX_B64_BYTES = 4 * 1024 * 1024; // 4MB base64 threshold
 
-  let body;
-  if (ext === 'pdf') {
-    const b64 = await fileToBase64(file);
-    body = { model:'claude-sonnet-4-20250514', max_tokens:8000, messages:[{ role:'user', content:[
-      { type:'document', source:{ type:'base64', media_type:'application/pdf', data:b64 } },
-      { type:'text', text:prompt }
-    ]}]};
-  } else {
-    let text = '';
-    try { text = await file.text(); if (text.length > 30000) text = text.slice(0,30000)+'\n[content truncated — file too large]'; } catch(e) { text = `[Binary: ${file.name}]`; }
-    body = { model:'claude-sonnet-4-20250514', max_tokens:8000, messages:[{ role:'user', content:`${prompt}\n\nContent:\n\`\`\`\n${text}\n\`\`\`` }]};
+async function splitPdfIntoChunks(file) {
+  const arrayBuf = await file.arrayBuffer();
+  const pdfDoc = await PDFLib.PDFDocument.load(arrayBuf);
+  const totalPages = pdfDoc.getPageCount();
+  const chunks = [];
+  for (let start = 0; start < totalPages; start += CHUNK_PAGES) {
+    const end = Math.min(start + CHUNK_PAGES, totalPages);
+    const chunk = await PDFLib.PDFDocument.create();
+    const pages = await chunk.copyPages(pdfDoc, Array.from({length: end - start}, (_, i) => start + i));
+    pages.forEach(p => chunk.addPage(p));
+    const bytes = await chunk.save();
+    const b64 = btoa(String.fromCharCode(...new Uint8Array(bytes)));
+    chunks.push({ b64, startPage: start + 1, endPage: end, totalPages });
   }
+  return chunks;
+}
 
+async function callAPI(body) {
   const response = await fetch('/api/convert', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   });
-
   const data = await response.json();
   if (!response.ok) throw new Error(data.error?.message || data.error || response.statusText);
   const raw = data.content.map(c => c.text||'').join('');
@@ -234,9 +219,67 @@ Instructions:
   try {
     return JSON.parse(clean);
   } catch(e) {
-    // Try to recover a partial JSON by finding the last complete section
     const partial = clean.replace(/,?\s*\{[^}]*$/, '').replace(/,?\s*$/, '') + ']}';
-    try { return JSON.parse(partial); } catch(e2) { throw new Error('Response too large to parse — try a smaller file or split it into parts'); }
+    try { return JSON.parse(partial); } catch(e2) { throw new Error('Could not parse response — try a smaller file'); }
+  }
+}
+
+async function convertFile(file, onChunkProgress) {
+  const ext = file.name.split('.').pop().toLowerCase();
+  const baseName = file.name.replace(/\.[^.]+$/, '');
+
+  const makePrompt = (label) => `You are converting a document to clean, LLM-ready markdown.
+File: "${label}"
+Instructions:
+1. Extract all text content and structure it as clean markdown
+2. Detect logical sections by headings, chapters, or major topic breaks
+3. Return ONLY valid, complete JSON — no extra text, no markdown fences, no trailing commas:
+{"fileName":"filename without extension","sections":[{"title":"Section title","slug":"kebab-case-slug","content":"Full markdown content"}]}
+4. For short chunks a single section is fine. For larger chunks split into logical sections.
+5. Make markdown clean and immediately usable by an LLM
+6. Preserve tables as markdown tables, lists as markdown lists
+7. CRITICAL: Be concise. Your entire response must be valid complete JSON — never truncate mid-string.`;
+
+  if (ext === 'pdf') {
+    const rawB64 = await fileToBase64(file);
+    // If small enough, send as one chunk
+    if (rawB64.length < MAX_B64_BYTES) {
+      onChunkProgress && onChunkProgress(0.5);
+      const result = await callAPI({ model:'claude-sonnet-4-20250514', max_tokens:8000, messages:[{ role:'user', content:[
+        { type:'document', source:{ type:'base64', media_type:'application/pdf', data:rawB64 } },
+        { type:'text', text:makePrompt(file.name) }
+      ]}]});
+      onChunkProgress && onChunkProgress(1);
+      return result;
+    }
+
+    // Large PDF — split into page chunks
+    const chunks = await splitPdfIntoChunks(file);
+    const allSections = [];
+    for (let ci = 0; ci < chunks.length; ci++) {
+      const { b64, startPage, endPage, totalPages } = chunks[ci];
+      const label = `${file.name} (pages ${startPage}–${endPage} of ${totalPages})`;
+      const result = await callAPI({ model:'claude-sonnet-4-20250514', max_tokens:8000, messages:[{ role:'user', content:[
+        { type:'document', source:{ type:'base64', media_type:'application/pdf', data:b64 } },
+        { type:'text', text:makePrompt(label) }
+      ]}]});
+      // Prefix section titles with page range to keep them distinct
+      result.sections.forEach(s => {
+        s.title = `[pp. ${startPage}–${endPage}] ${s.title}`;
+        s.slug = `pp-${startPage}-${endPage}-${s.slug}`;
+        allSections.push(s);
+      });
+      onChunkProgress && onChunkProgress((ci + 1) / chunks.length);
+    }
+    return { fileName: baseName, sections: allSections };
+
+  } else {
+    let text = '';
+    try { text = await file.text(); if (text.length > 30000) text = text.slice(0,30000)+'\n[content truncated]'; } catch(e) { text = `[Binary: ${file.name}]`; }
+    onChunkProgress && onChunkProgress(0.5);
+    const result = await callAPI({ model:'claude-sonnet-4-20250514', max_tokens:8000, messages:[{ role:'user', content:`${makePrompt(file.name)}\n\nContent:\n\`\`\`\n${text}\n\`\`\`` }]});
+    onChunkProgress && onChunkProgress(1);
+    return result;
   }
 }
 
@@ -250,7 +293,11 @@ convertBtn.addEventListener('click', async () => {
     const file = files[i];
     startProgress(file.name, i, files.length);
     try {
-      const result = await convertFile(file);
+      const result = await convertFile(file, (chunkPct) => {
+        const overallBase = (i / files.length) * 100;
+        const overallSlice = (1 / files.length) * 100;
+        setProgress(overallBase + chunkPct * overallSlice);
+      });
       finishProgress(i, files.length);
       window._allResults[result.fileName] = result;
       renderResult(result);
