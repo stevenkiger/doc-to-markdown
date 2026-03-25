@@ -57,11 +57,8 @@
   .action-btn:hover{background:#f5f4f0}
   .download-all-btn{width:100%;padding:10px;border:0.5px solid #b4b2a9;border-radius:8px;background:transparent;cursor:pointer;font-family:'Syne',sans-serif;font-size:14px;font-weight:500;margin-top:0.5rem;transition:background 0.15s}
   .download-all-btn:hover{background:#f5f4f0}
-  .status-bar{font-size:13px;color:#888780;display:flex;align-items:center;gap:8px;margin-bottom:1rem}
-  .spinner{width:14px;height:14px;border:2px solid #d3d1c7;border-top-color:#1a1a18;border-radius:50%;animation:spin 0.7s linear infinite;flex-shrink:0}
-  @keyframes spin{to{transform:rotate(360deg)}}
-  .progress-file{font-weight:500;color:#1a1a18}
   .error-text{color:#a32d2d}
+  .progress-file{font-weight:500;color:#1a1a18}
 </style>
 </head>
 <body>
@@ -87,7 +84,17 @@
 <input type="file" id="fileInput" multiple accept=".pdf,.docx,.pptx,.xlsx,.csv,.txt" style="display:none">
 
 <div class="file-list" id="fileList"></div>
-<div id="statusBar" style="display:none" class="status-bar"></div>
+
+<div id="progressBlock" style="display:none;margin-bottom:1.25rem;">
+  <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+    <span id="progressLabel" style="font-size:13px;color:#888780;"></span>
+    <span id="progressPct" style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#1a1a18;font-weight:500;"></span>
+  </div>
+  <div style="height:4px;background:#e0ded8;border-radius:99px;overflow:hidden;">
+    <div id="progressBar" style="height:100%;width:0%;background:#1a1a18;border-radius:99px;transition:width 0.4s ease;"></div>
+  </div>
+</div>
+
 <button class="convert-btn" id="convertBtn" disabled>Convert to markdown</button>
 <div class="results" id="results"></div>
 <button class="download-all-btn" id="downloadAllBtn" style="display:none">⬇ Download all as ZIP</button>
@@ -100,10 +107,46 @@ const fileList = document.getElementById('fileList');
 const convertBtn = document.getElementById('convertBtn');
 const resultsEl = document.getElementById('results');
 const downloadAllBtn = document.getElementById('downloadAllBtn');
-const statusBar = document.getElementById('statusBar');
+const progressBlock = document.getElementById('progressBlock');
+const progressBar = document.getElementById('progressBar');
+const progressLabel = document.getElementById('progressLabel');
+const progressPct = document.getElementById('progressPct');
 
 let files = [];
 window._allResults = {};
+let _progressTimer = null;
+
+function startProgress(filename, fileIndex, total) {
+  progressBlock.style.display = 'block';
+  const overallBase = (fileIndex / total) * 100;
+  const overallSlice = (1 / total) * 100;
+  progressLabel.innerHTML = `Converting <span class="progress-file">${filename}</span> — file ${fileIndex + 1} of ${total}`;
+  let fake = 0;
+  clearInterval(_progressTimer);
+  setProgress(overallBase);
+  _progressTimer = setInterval(() => {
+    fake = Math.min(fake + (Math.random() * 2.5), 88);
+    setProgress(overallBase + (fake / 100) * overallSlice);
+  }, 400);
+}
+
+function finishProgress(fileIndex, total) {
+  clearInterval(_progressTimer);
+  const pct = ((fileIndex + 1) / total) * 100;
+  setProgress(pct);
+}
+
+function setProgress(pct) {
+  const rounded = Math.min(Math.round(pct), 100);
+  progressBar.style.width = rounded + '%';
+  progressPct.textContent = rounded + '%';
+}
+
+function hideProgress() {
+  clearInterval(_progressTimer);
+  progressBlock.style.display = 'none';
+  progressBar.style.width = '0%';
+}
 
 dropZone.addEventListener('click', () => fileInput.click());
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
@@ -205,12 +248,14 @@ convertBtn.addEventListener('click', async () => {
 
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
-    showStatus(`Converting <span class="progress-file">${file.name}</span> (${i+1} of ${files.length})...`);
+    startProgress(file.name, i, files.length);
     try {
       const result = await convertFile(file);
+      finishProgress(i, files.length);
       window._allResults[result.fileName] = result;
       renderResult(result);
     } catch(err) {
+      finishProgress(i, files.length);
       const errCard = document.createElement('div');
       errCard.className = 'result-card';
       errCard.innerHTML = `<div class="result-header"><span class="result-title error-text">${file.name} — failed: ${err.message}</span></div>`;
@@ -218,7 +263,7 @@ convertBtn.addEventListener('click', async () => {
     }
   }
 
-  hideStatus();
+  hideProgress();
   convertBtn.disabled = false;
   if (Object.keys(window._allResults).length > 0) downloadAllBtn.style.display = 'block';
 });
