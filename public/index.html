@@ -185,7 +185,7 @@ function fileToBase64(file) {
 function showStatus(msg, loading=true) {}
 function hideStatus() {}
 
-const PAGES_PER_CHUNK = 5;
+const PAGES_PER_CHUNK = 3;
 let pdfjsLib = null;
 
 async function loadPdfJs() {
@@ -202,15 +202,15 @@ async function loadPdfJs() {
   return pdfjsLib;
 }
 
-async function renderPageToJpeg(pdfDoc, pageNum, scale = 1.5) {
+async function renderPageToJpeg(pdfDoc, pageNum) {
   const page = await pdfDoc.getPage(pageNum);
-  const viewport = page.getViewport({ scale });
+  // Scale 1.0 + quality 50% keeps each page ~150-300KB — well under Vercel's 4.5MB limit even for 3 pages
+  const viewport = page.getViewport({ scale: 1.0 });
   const canvas = document.createElement('canvas');
   canvas.width = viewport.width;
   canvas.height = viewport.height;
   await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
-  // Export as JPEG at 70% quality — keeps each page well under 1MB
-  return canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
+  return canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
 }
 
 async function callAPI(body) {
