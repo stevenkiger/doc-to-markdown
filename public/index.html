@@ -26,6 +26,7 @@
   .ext-pptx{background:#faeeda;color:#854f0b}
   .ext-xlsx{background:#eaf3de;color:#3b6d11}
   .ext-csv,.ext-txt{background:#f1efe8;color:#5f5e5a}
+  .ext-xlsx{background:#eaf3de;color:#3b6d11}
   .file-name{font-size:14px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .file-size{font-size:12px;color:#888780}
   .remove-btn{background:none;border:none;cursor:pointer;color:#b4b2a9;font-size:16px;padding:2px 6px;border-radius:4px;line-height:1}
@@ -100,6 +101,7 @@
 <button class="download-all-btn" id="downloadAllBtn" style="display:none">⬇ Download all as ZIP</button>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
@@ -231,9 +233,61 @@ async function callAPI(body) {
   }
 }
 
+// Convert a sheet's 2D array to a markdown table
+function sheetToMarkdownTable(rows) {
+  if (!rows || rows.length === 0) return '*Empty sheet*';
+  // Normalise row lengths
+  const maxCols = Math.max(...rows.map(r => r.length));
+  const pad = (r) => [...r, ...Array(maxCols - r.length).fill('')];
+  const clean = rows.map(r => pad(r).map(c => String(c ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ')));
+  const header = clean[0];
+  const body = clean.slice(1);
+  const sep = header.map(() => '---');
+  const toRow = (r) => '| ' + r.join(' | ') + ' |';
+  return [toRow(header), toRow(sep), ...body.map(toRow)].join('\n');
+}
+
+async function convertXlsx(file, onChunkProgress) {
+  const baseName = file.name.replace(/\.[^.]+$/, '');
+  const ext = file.name.split('.').pop().toLowerCase();
+  const arrayBuf = await file.arrayBuffer();
+  const wb = XLSX.read(arrayBuf, { type: 'array', cellDates: true });
+
+  if (ext === 'csv') {
+    // CSV — single sheet
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    const md = `# ${baseName}\n\n${sheetToMarkdownTable(rows)}`;
+    onChunkProgress && onChunkProgress(1);
+    return { fileName: baseName, sections: [{ title: baseName, slug: baseName.toLowerCase().replace(/\W+/g,'-'), content: md }] };
+  }
+
+  // XLSX — one section per sheet
+  const sections = [];
+  for (let i = 0; i < wb.SheetNames.length; i++) {
+    const sheetName = wb.SheetNames[i];
+    const ws = wb.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    // Skip truly empty sheets
+    const hasData = rows.some(r => r.some(c => String(c ?? '').trim() !== ''));
+    const content = hasData
+      ? `# ${sheetName}\n\n${sheetToMarkdownTable(rows)}`
+      : `# ${sheetName}\n\n*This sheet is empty.*`;
+    const slug = sheetName.toLowerCase().replace(/\W+/g, '-').replace(/^-|-$/g, '');
+    sections.push({ title: sheetName, slug, content });
+    onChunkProgress && onChunkProgress((i + 1) / wb.SheetNames.length);
+  }
+  return { fileName: baseName, sections };
+}
+
 async function convertFile(file, onChunkProgress) {
   const ext = file.name.split('.').pop().toLowerCase();
   const baseName = file.name.replace(/\.[^.]+$/, '');
+
+  // XLSX / CSV — handled entirely in the browser via SheetJS, no API call needed
+  if (ext === 'xlsx' || ext === 'csv') {
+    return convertXlsx(file, onChunkProgress);
+  }
 
   const prompt = (label) => `You are converting a document to clean, LLM-ready markdown.
 File: "${label}"
